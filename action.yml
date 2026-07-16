@@ -1,5 +1,5 @@
-name: testmedic
-description: Self-healing E2E tests. Classifies Playwright failures, repairs UI drift in a verified PR, reports real bugs as issues.
+name: TestMedic - Self-Healing E2E Tests
+description: Classifies Playwright failures, repairs UI drift in a verified PR, reports real bugs as issues.
 branding:
   icon: activity
   color: green
