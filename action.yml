@@ -1,0 +1,82 @@
+name: testmedic
+description: Self-healing E2E tests. Classifies Playwright failures, repairs UI drift in a verified PR, reports real bugs as issues.
+branding:
+  icon: activity
+  color: green
+
+inputs:
+  claude-code-oauth-token:
+    description: Claude subscription OAuth token (from `claude setup-token`). Provide this or anthropic-api-key.
+    required: false
+    default: ''
+  anthropic-api-key:
+    description: Anthropic API key. Provide this or claude-code-oauth-token.
+    required: false
+    default: ''
+  model:
+    description: Model used for diagnosis and healing.
+    required: false
+    default: claude-sonnet-5
+  mode:
+    description: heal (fix and open a PR), dry-run (log proposals only), or issue-only (never patch, only report).
+    required: false
+    default: heal
+  max-heals:
+    description: Maximum number of tests to heal per run (cost cap and loop guard).
+    required: false
+    default: '3'
+  min-confidence:
+    description: Minimum model confidence (0 to 1) required to apply a heal.
+    required: false
+    default: '0.6'
+  report:
+    description: Path to the Playwright JSON report, relative to working-directory.
+    required: false
+    default: test-results/results.json
+  working-directory:
+    description: Directory containing the Playwright project, relative to the repository root.
+    required: false
+    default: '.'
+  test-command:
+    description: Command used to re-run a healed test for verification.
+    required: false
+    default: npx playwright test
+  github-token:
+    description: Token used to push the heal branch and open PRs/issues.
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  pr-url:
+    description: URL of the heal pull request, if one was opened.
+    value: ${{ steps.run.outputs.pr-url }}
+  issue-urls:
+    description: Comma-separated URLs of bug issues opened.
+    value: ${{ steps.run.outputs.issue-urls }}
+  healed-count:
+    description: Number of tests healed and verified.
+    value: ${{ steps.run.outputs.healed-count }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install healer dependencies
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      run: npm ci --omit=dev
+
+    - name: Run testmedic
+      id: run
+      shell: bash
+      env:
+        CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.claude-code-oauth-token }}
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+        GH_TOKEN: ${{ inputs.github-token }}
+        TM_MODEL: ${{ inputs.model }}
+        TM_MODE: ${{ inputs.mode }}
+        TM_MAX_HEALS: ${{ inputs.max-heals }}
+        TM_MIN_CONFIDENCE: ${{ inputs.min-confidence }}
+        TM_REPORT: ${{ inputs.report }}
+        TM_WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        TM_TEST_COMMAND: ${{ inputs.test-command }}
+      run: node "${{ github.action_path }}/dist/src/main.js"
