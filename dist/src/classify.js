@@ -10,7 +10,9 @@ export function classify(test) {
     if (/net::ERR_|ERR_CONNECTION|page crashed|browser has been closed/i.test(msg)) {
         return { category: 'real-bug', reason: 'Network error or crash during the test' };
     }
-    const elementWasFound = /locator resolved to/.test(msg);
+    // "locator resolved to 0 elements" means NOT found; only a resolution to an
+    // actual element (or a nonzero count) proves the selector still works.
+    const elementWasFound = /locator resolved to (?!0 element)/.test(msg);
     const valueMismatch = /Expected(:| string| pattern)/.test(msg) && /Received/.test(msg);
     if (elementWasFound && valueMismatch) {
         return {
