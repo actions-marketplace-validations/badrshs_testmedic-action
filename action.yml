@@ -41,6 +41,10 @@ inputs:
     description: Command used to re-run a healed test for verification.
     required: false
     default: npx playwright test
+  base-url:
+    description: Base URL of the app under test, used to fetch live DOM evidence for healing. Defaults to the baseURL found in the Playwright config.
+    required: false
+    default: ''
   github-token:
     description: Token used to push the heal branch and open PRs/issues.
     required: false
@@ -79,4 +83,5 @@ runs:
         TM_REPORT: ${{ inputs.report }}
         TM_WORKING_DIRECTORY: ${{ inputs.working-directory }}
         TM_TEST_COMMAND: ${{ inputs.test-command }}
+        TM_BASE_URL: ${{ inputs.base-url }}
       run: node "${{ github.action_path }}/dist/src/main.js"

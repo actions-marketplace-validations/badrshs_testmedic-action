@@ -5,6 +5,7 @@ import { requestPatch } from './heal.js';
 import { buildHealPrompt } from './prompts.js';
 import { applyEdits, revertFile } from './patch.js';
 import { verifyTest } from './verify.js';
+import { extractGotoPaths, detectBaseUrl, fetchDomDigest } from './dom.js';
 import { createHealPullRequest, createBugIssues, currentBranch, } from './deliver.js';
 export async function runPipeline(options) {
     const { log } = options;
@@ -56,79 +57,110 @@ export async function runPipeline(options) {
     deliver(result, options);
     return result;
 }
+const VERIFY_ROUNDS = 2;
 async function healOneTest(test, classificationReason, options) {
     const { log } = options;
     const testSource = fs.readFileSync(test.file, 'utf8');
-    let patch = await requestPatch(buildHealPrompt({
-        errorContext: test.errorContext,
-        testFilePath: test.file,
-        testSource,
-        classificationReason,
-    }), options.model);
-    if (!patch) {
-        log(`  model returned no parseable patch; reporting as bug`);
-        return { kind: 'bug', bug: { test, reason: 'Healing failed: model returned no usable patch' } };
-    }
-    if (patch.verdict !== 'heal') {
-        log(`  model verdict: ${patch.verdict} (${patch.explanation.slice(0, 120)})`);
-        return {
-            kind: 'bug',
-            bug: { test, reason: `Model judged this a ${patch.verdict === 'bug' ? 'real bug' : 'case to skip'}`, explanation: patch.explanation },
-        };
-    }
-    if (patch.confidence < options.minConfidence) {
-        log(`  confidence ${patch.confidence} below threshold ${options.minConfidence}; not healing`);
-        return {
-            kind: 'bug',
-            bug: { test, reason: `Heal confidence too low (${patch.confidence})`, explanation: patch.explanation },
-        };
-    }
-    log(`  proposed: ${patch.old_selector} -> ${patch.new_selector} (confidence ${patch.confidence})`);
-    if (options.mode === 'dry-run') {
-        return { kind: 'healed', record: { test, patch, verified: false, applied: false } };
-    }
-    let applied = applyEdits(test.file, patch.edits);
-    if (!applied.ok) {
-        log(`  patch did not apply (${applied.reason}); retrying once with feedback`);
-        patch = await requestPatch(buildHealPrompt({
+    const domDigest = await collectDomDigest(testSource, options);
+    let verifyFeedback;
+    let lastExplanation;
+    for (let round = 1; round <= VERIFY_ROUNDS; round++) {
+        const prompt = (previousAttempt) => buildHealPrompt({
             errorContext: test.errorContext,
             testFilePath: test.file,
             testSource,
             classificationReason,
-            previousAttempt: applied.reason,
-        }), options.model);
-        if (!patch || patch.verdict !== 'heal') {
-            return { kind: 'bug', bug: { test, reason: 'Healing failed: patch could not be applied' } };
+            previousAttempt,
+            domDigest,
+            verifyFailure: verifyFeedback,
+        });
+        let patch = await requestPatch(prompt(), options.model);
+        if (!patch) {
+            log(`  model returned no parseable patch; reporting as bug`);
+            return { kind: 'bug', bug: { test, reason: 'Healing failed: model returned no usable patch' } };
         }
-        applied = applyEdits(test.file, patch.edits);
-        if (!applied.ok) {
+        if (patch.verdict !== 'heal') {
+            log(`  model verdict: ${patch.verdict} (${patch.explanation.slice(0, 120)})`);
             return {
                 kind: 'bug',
-                bug: { test, reason: `Healing failed: patch could not be applied (${applied.reason})` },
+                bug: {
+                    test,
+                    reason: `Model judged this a ${patch.verdict === 'bug' ? 'real bug' : 'case to skip'}`,
+                    explanation: patch.explanation,
+                },
             };
         }
-    }
-    log(`  patch applied; verifying by re-running the test`);
-    const verification = verifyTest({
-        cwd: options.workingDirectory,
-        testCommand: options.testCommand,
-        specFile: test.file,
-        title: test.title,
-    });
-    if (!verification.passed) {
+        if (patch.confidence < options.minConfidence) {
+            log(`  confidence ${patch.confidence} below threshold ${options.minConfidence}; not healing`);
+            return {
+                kind: 'bug',
+                bug: {
+                    test,
+                    reason: `Heal confidence too low (${patch.confidence})`,
+                    explanation: patch.explanation,
+                },
+            };
+        }
+        log(`  round ${round}: proposed ${patch.old_selector} -> ${patch.new_selector} (confidence ${patch.confidence})`);
+        lastExplanation = patch.explanation;
+        if (options.mode === 'dry-run') {
+            return { kind: 'healed', record: { test, patch, verified: false, applied: false } };
+        }
+        let applied = applyEdits(test.file, patch.edits);
+        if (!applied.ok) {
+            log(`  patch did not apply (${applied.reason}); retrying once with feedback`);
+            patch = await requestPatch(prompt(applied.reason), options.model);
+            if (!patch || patch.verdict !== 'heal') {
+                return { kind: 'bug', bug: { test, reason: 'Healing failed: patch could not be applied' } };
+            }
+            applied = applyEdits(test.file, patch.edits);
+            if (!applied.ok) {
+                return {
+                    kind: 'bug',
+                    bug: { test, reason: `Healing failed: patch could not be applied (${applied.reason})` },
+                };
+            }
+        }
+        log(`  patch applied; verifying by re-running the test`);
+        const verification = verifyTest({
+            cwd: options.workingDirectory,
+            testCommand: options.testCommand,
+            specFile: test.file,
+            title: test.title,
+        });
+        if (verification.passed) {
+            log(`  verified green`);
+            return { kind: 'healed', record: { test, patch, verified: true, applied: true } };
+        }
         revertFile(test.file, applied.original);
-        log(`  verification failed; patch reverted`);
-        return {
-            kind: 'bug',
-            bug: {
-                test,
-                reason: 'A repaired selector still fails, so the behavior itself is broken',
-                explanation: patch.explanation,
-            },
-        };
+        log(`  round ${round}: verification failed; patch reverted`);
+        verifyFeedback = `Tried: ${patch.old_selector} -> ${patch.new_selector} (edits applied, test re-run, still failed).\nRe-run output tail:\n${verification.output.slice(-1500)}`;
     }
-    log(`  verified green`);
-    return { kind: 'healed', record: { test, patch, verified: true, applied: true } };
+    return {
+        kind: 'bug',
+        bug: {
+            test,
+            reason: `Still failing after ${VERIFY_ROUNDS} verified repair attempts, so the behavior itself likely changed`,
+            explanation: lastExplanation,
+        },
+    };
+}
+async function collectDomDigest(testSource, options) {
+    try {
+        const paths = extractGotoPaths(testSource);
+        if (paths.length === 0)
+            return undefined;
+        const baseUrl = detectBaseUrl(options.workingDirectory);
+        if (!baseUrl) {
+            options.log('  dom digest: no baseURL found (config or base-url input); skipping');
+            return undefined;
+        }
+        return await fetchDomDigest(baseUrl, paths, options.log);
+    }
+    catch (error) {
+        options.log(`  dom digest failed (${error?.message ?? error}); continuing without it`);
+        return undefined;
+    }
 }
 function deliver(result, options) {
     const { log } = options;

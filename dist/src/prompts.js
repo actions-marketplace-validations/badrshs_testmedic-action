@@ -36,6 +36,12 @@ export function buildHealPrompt(options) {
     const retryNote = options.previousAttempt
         ? `\n\nIMPORTANT: a previous attempt failed to apply: ${options.previousAttempt}. Produce corrected edits (old_string must match the file exactly and be unique).`
         : '';
+    const digestSection = options.domDigest
+        ? `\n\n=== LIVE DOM DIGEST (fetched from the pages this test visits; the aria snapshot above has no ids, this does) ===\n${options.domDigest}\n=== END DOM DIGEST ===`
+        : '';
+    const verifySection = options.verifyFailure
+        ? `\n\nIMPORTANT: a previous repair was applied and the test STILL FAILED on re-run. Do not repeat that approach. Previous attempt result:\n${options.verifyFailure}\nPropose a different repair, or verdict "bug" if you now believe the behavior itself is broken.`
+        : '';
     return `A Playwright test failed in CI. Our deterministic classifier says: ${options.classificationReason}.
 
 Below is the failure report Playwright produced (error, page snapshot at the moment of failure, and annotated test source), followed by the complete current content of the test file.
@@ -45,7 +51,7 @@ ${options.errorContext}
 
 === FULL TEST FILE: ${options.testFilePath} ===
 ${options.testSource}
-=== END TEST FILE ===
+=== END TEST FILE ===${digestSection}${verifySection}
 
 Diagnose and respond with the JSON object only.${retryNote}`;
 }
