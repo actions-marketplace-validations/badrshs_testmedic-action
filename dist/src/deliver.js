@@ -38,9 +38,9 @@ export function createHealPullRequest(options) {
 }
 export function createBugIssues(options) {
     const { repoRoot, bugs, runUrl } = options;
-    let existingTitles = [];
+    let existing = [];
     try {
-        existingTitles = JSON.parse(gh(repoRoot, 'issue', 'list', '--state', 'open', '--json', 'title', '--limit', '100')).map((issue) => issue.title);
+        existing = JSON.parse(gh(repoRoot, 'issue', 'list', '--state', 'open', '--json', 'number,title', '--limit', '100'));
     }
     catch {
         // listing failures should not block reporting; fall through and create
@@ -48,9 +48,15 @@ export function createBugIssues(options) {
     const urls = [];
     for (const bug of bugs) {
         const title = `E2E failure looks like a real bug: ${bug.test.title}`;
-        if (existingTitles.includes(title))
-            continue;
         const bodyFile = path.join(os.tmpdir(), `testmedic-issue-${Math.random().toString(36).slice(2)}.md`);
+        const match = existing.find((issue) => issue.title === title);
+        if (match) {
+            // Never go silent: a fresh run means a fresh diagnosis the human has
+            // not seen. Update the existing issue instead of skipping.
+            fs.writeFileSync(bodyFile, `The failure is still occurring; updated diagnosis from the latest run:\n\n${buildIssueBody(bug, runUrl)}`);
+            urls.push(gh(repoRoot, 'issue', 'comment', String(match.number), '--body-file', bodyFile));
+            continue;
+        }
         fs.writeFileSync(bodyFile, buildIssueBody(bug, runUrl));
         urls.push(gh(repoRoot, 'issue', 'create', '--title', title, '--body-file', bodyFile));
     }
@@ -87,7 +93,7 @@ function buildIssueBody(bug, runUrl) {
 
 **Test:** ${bug.test.title}
 **File:** ${bug.test.file}:${bug.test.line}
-**Why it looks like a bug:** ${bug.reason}${bug.explanation ? `\n**Model diagnosis:** ${bug.explanation}` : ''}
+**Why it looks like a bug:** ${bug.reason}${bug.explanation ? `\n**Model diagnosis:** ${bug.explanation}` : ''}${bug.suggestedFix ? `\n\n## Suggested fix (unverified, apply and review as a human)\n\n${bug.suggestedFix}` : ''}
 
 ## Error
 

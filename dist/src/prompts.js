@@ -8,6 +8,7 @@ export const PatchSchema = z.object({
         .array(z.object({ old_string: z.string(), new_string: z.string() }))
         .default([]),
     confidence: z.number().min(0).max(1),
+    suggested_app_fix: z.string().default(''),
 });
 export const SYSTEM_PROMPT = `You are testmedic, an expert Playwright test repair agent running inside CI.
 
@@ -21,6 +22,8 @@ Hard rules:
 - Edits must be exact literal replacements against the test source: old_string must appear exactly once in the file, and must include enough surrounding context to be unique.
 
 Write the explanation in plain language a reviewer skims in ten seconds. Use simple punctuation only: no em dashes.
+
+When your verdict is "bug" and the evidence shows you the likely root cause in the application itself (for example the DOM digest reveals a renamed id while scripts or labels still reference the old one), describe the minimal application-side fix in suggested_app_fix: name the file or component if visible, what to change, and a short code sketch. It is shown to a human as an unverified suggestion, never applied automatically. Leave it empty when you cannot see the root cause.
 
 Respond with ONLY a JSON object, no prose around it, in this shape:
 {

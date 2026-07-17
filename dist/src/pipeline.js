@@ -64,6 +64,7 @@ async function healOneTest(test, classificationReason, options) {
     const domDigest = await collectDomDigest(testSource, options);
     let verifyFeedback;
     let lastExplanation;
+    let lastSuggestedFix;
     for (let round = 1; round <= VERIFY_ROUNDS; round++) {
         const prompt = (previousAttempt) => buildHealPrompt({
             errorContext: test.errorContext,
@@ -87,6 +88,7 @@ async function healOneTest(test, classificationReason, options) {
                     test,
                     reason: `Model judged this a ${patch.verdict === 'bug' ? 'real bug' : 'case to skip'}`,
                     explanation: patch.explanation,
+                    suggestedFix: patch.suggested_app_fix || undefined,
                 },
             };
         }
@@ -103,6 +105,7 @@ async function healOneTest(test, classificationReason, options) {
         }
         log(`  round ${round}: proposed ${patch.old_selector} -> ${patch.new_selector} (confidence ${patch.confidence})`);
         lastExplanation = patch.explanation;
+        lastSuggestedFix = patch.suggested_app_fix || lastSuggestedFix;
         if (options.mode === 'dry-run') {
             return { kind: 'healed', record: { test, patch, verified: false, applied: false } };
         }
@@ -142,6 +145,7 @@ async function healOneTest(test, classificationReason, options) {
             test,
             reason: `Still failing after ${VERIFY_ROUNDS} verified repair attempts, so the behavior itself likely changed`,
             explanation: lastExplanation,
+            suggestedFix: lastSuggestedFix,
         },
     };
 }
